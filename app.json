@@ -1,0 +1,18 @@
+{
+  "expo": {
+    "name": "Open Fidget Lab",
+    "slug": "open-fidget",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "backgroundColor": "#09090B",
+    "ios": {
+      "supportsTablet": false
+    },
+    "android": {
+      "permissions": [
+        "VIBRATE"
+      ]
+    }
+  }
+}
