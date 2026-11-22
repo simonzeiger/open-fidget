@@ -2,6 +2,9 @@
 
 An Expo Go prototype for validating eyes-free haptic fidget mechanics and micro-games on iPhone before building custom hardware.
 
+- **Product Vision & Rough Spec:** [SPEC.md](SPEC.md)
+- **Expo POC Overview:** [docs/expo-poc.md](docs/expo-poc.md)
+
 ## Included Prototypes
 1. **Safe Cracker** — Drag your thumb slowly across 24 virtual dial detents, feel the tension and heavy double-thunk of the secret tumbler, and lift to lock pins.
 2. **Rhythm Echo** — Single-thumb eyes-free Simon using quick taps (`DOT`) and 0.25s holds (`DASH`) with instant haptic confirmation.
