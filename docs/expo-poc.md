@@ -31,19 +31,27 @@ While testing on a real phone (especially with **Eyes-Free** enabled), pay atten
 - `App.js` + `src/` — Modular Expo app source (`src/haptics.js`, `src/theme.js`, and `src/modes/*`).
 - `SnackApp.js` — Single-file bundle of the same app for direct phone launch via Expo Snack.
 
-## Running the POC
+## Running the POC (Expo Go SDK 58)
 
-### Directly on iPhone (Expo Snack + Expo Go)
-1. Install **Expo Go** from the iOS App Store and sign in.
-2. Open the Snack link on your iPhone:
-   [Launch in Expo Snack (SDK 58)](https://snack.expo.dev/?sdkVersion=58.0.0&platform=mydevice&name=Open%20Fidget%20Lab&dependencies=expo-haptics,expo-sensors,react-native-safe-area-context&sourceUrl=https%3A%2F%2Fraw.githubusercontent.com%2Fsimonzeiger%2Fopen-fidget%2Fmain%2FSnackApp.js)
-3. Tap **Open in Expo Go**.
+> **Why not Expo Snack?** Expo Snack currently tops out at SDK 54, whereas the App Store version of Expo Go only runs SDK 58 projects. Running `expo start --tunnel` via GitHub Codespaces or a local machine serves SDK 58 cleanly to Expo Go.
+
+### From your iPhone via GitHub Codespaces
+1. Install **Expo Go** from the iOS App Store and sign in with a free Expo account.
+2. Launch a free Codespace: [codespaces.new/simonzeiger/open-fidget](https://codespaces.new/simonzeiger/open-fidget)
+3. Run in the terminal:
+   ```bash
+   npm install
+   npx expo login
+   npm run tunnel
+   ```
+4. Open **Expo Go** on your iPhone (signed into the same Expo account) — the app will appear under **Recently in development**.
 
 > Note: iOS suppresses haptics when **Low Power Mode** is enabled or **System Haptics** is turned off in Settings.
 
 ### Locally
 ```bash
 npm install
+npx expo login
 npx expo start
 ```
 Scan the QR code with your iPhone to open in Expo Go.

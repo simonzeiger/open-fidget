@@ -14,17 +14,25 @@ An Expo Go prototype for validating eyes-free haptic fidget mechanics and micro-
 
 Every mode supports an **Eyes-Free (`◐ EYES-FREE`)** blackout toggle so you can test whether the feel works without looking at the screen.
 
-## Running on iPhone
+## Running on iPhone (Expo Go SDK 58)
 
-### Option 1: Directly from your phone via Expo Snack (no computer required)
+> **Note on Expo Snack:** Snack currently caps out at SDK 54 while App Store Expo Go requires SDK 58, so use **GitHub Codespaces** (works from your phone browser!) or a laptop with Expo CLI.
+
+### Option 1: From your iPhone using GitHub Codespaces (no laptop needed)
 1. Install **Expo Go** from the iOS App Store and sign in with a free Expo account.
-2. Open on your iPhone:
-   `https://snack.expo.dev/?sdkVersion=58.0.0&platform=mydevice&name=Open%20Fidget%20Lab&dependencies=expo-haptics,expo-sensors,react-native-safe-area-context&sourceUrl=https%3A%2F%2Fraw.githubusercontent.com%2Fsimonzeiger%2Fopen-fidget%2Fmain%2FSnackApp.js`
-3. Tap **Open in Expo Go**.
+2. Open a free Codespace for this repo: https://codespaces.new/simonzeiger/open-fidget
+3. In the Codespace terminal, run:
+   ```bash
+   npm install
+   npx expo login
+   npm run tunnel
+   ```
+4. Sign in with the **same Expo account** as Expo Go, then open Expo Go on your iPhone — **Open Fidget Lab** will appear under **Recently in development** (or tap the `exp://` link printed in the terminal).
 
 ### Option 2: Locally from a computer
 ```bash
 npm install
+npx expo login
 npx expo start
 ```
-Scan the QR code with your iPhone camera to open in Expo Go.
+Scan the QR code with your iPhone camera (or open via **Recently in development** in Expo Go).
