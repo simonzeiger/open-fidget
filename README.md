@@ -15,10 +15,9 @@ Every mode supports an **Eyes-Free (`◐ EYES-FREE`)** blackout toggle so you ca
 
 ### Option 1: Directly from your phone via Expo Snack (no computer required)
 1. Install **Expo Go** from the iOS App Store and sign in with a free Expo account.
-2. Make sure this repository is **Public** on GitHub (Expo Snack can only import public repos).
-3. Open on your iPhone:
-   `https://snack.expo.dev/@git/github.com/simonzeiger/open-fidget`
-4. Tap **Open in Expo Go** (or select **My Device**).
+2. Open on your iPhone:
+   `https://snack.expo.dev/?platform=mydevice&name=Open%20Fidget%20Lab&dependencies=expo-haptics,expo-sensors&sourceUrl=https%3A%2F%2Fraw.githubusercontent.com%2Fsimonzeiger%2Fopen-fidget%2Fmain%2FSnackApp.js`
+3. Tap **Open in Expo Go**.
 
 ### Option 2: Locally from a computer
 ```bash
