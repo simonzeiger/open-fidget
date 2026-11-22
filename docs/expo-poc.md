@@ -36,7 +36,7 @@ While testing on a real phone (especially with **Eyes-Free** enabled), pay atten
 ### Directly on iPhone (Expo Snack + Expo Go)
 1. Install **Expo Go** from the iOS App Store and sign in.
 2. Open the Snack link on your iPhone:
-   [Launch in Expo Snack](https://snack.expo.dev/?platform=mydevice&name=Open%20Fidget%20Lab&dependencies=expo-haptics,expo-sensors&sourceUrl=https%3A%2F%2Fraw.githubusercontent.com%2Fsimonzeiger%2Fopen-fidget%2Fmain%2FSnackApp.js)
+   [Launch in Expo Snack (SDK 58)](https://snack.expo.dev/?sdkVersion=58.0.0&platform=mydevice&name=Open%20Fidget%20Lab&dependencies=expo-haptics,expo-sensors,react-native-safe-area-context&sourceUrl=https%3A%2F%2Fraw.githubusercontent.com%2Fsimonzeiger%2Fopen-fidget%2Fmain%2FSnackApp.js)
 3. Tap **Open in Expo Go**.
 
 > Note: iOS suppresses haptics when **Low Power Mode** is enabled or **System Haptics** is turned off in Settings.

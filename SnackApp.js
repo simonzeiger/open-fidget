@@ -1,6 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
@@ -9,8 +8,8 @@ import {
   ScrollView,
   PanResponder,
   StatusBar,
-  Platform,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Accelerometer } from 'expo-sensors';
 
@@ -1044,62 +1043,64 @@ export default function App() {
   const ActiveComponent = activeMode.component;
 
   return (
-    <SafeAreaView style={[appStyles.root, blindMode && appStyles.rootBlind]}>
-      <StatusBar barStyle="light-content" backgroundColor={blindMode ? '#000000' : COLORS.bg} />
+    <SafeAreaProvider>
+      <SafeAreaView style={[appStyles.root, blindMode && appStyles.rootBlind]}>
+        <StatusBar barStyle="light-content" backgroundColor={blindMode ? '#000000' : COLORS.bg} />
 
-      {blindMode ? (
-        <View style={appStyles.blindTopBar}>
-          <TouchableOpacity
-            style={appStyles.blindExitBtn}
-            onPress={() => { haptics.medium(); setBlindMode(false); }}
-          >
-            <Text style={appStyles.blindExitText}>EXIT EYES-FREE ({activeMode.label.toUpperCase()})</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <>
-          <View style={appStyles.header}>
-            <View>
-              <Text style={appStyles.brand}>OPEN FIDGET</Text>
-              <Text style={appStyles.subtitle}>Haptic Validation Lab v0</Text>
-            </View>
+        {blindMode ? (
+          <View style={appStyles.blindTopBar}>
             <TouchableOpacity
-              style={appStyles.blindBtn}
-              onPress={() => { haptics.medium(); setBlindMode(true); }}
+              style={appStyles.blindExitBtn}
+              onPress={() => { haptics.medium(); setBlindMode(false); }}
             >
-              <Text style={appStyles.blindBtnText}>◐ EYES-FREE</Text>
+              <Text style={appStyles.blindExitText}>EXIT EYES-FREE ({activeMode.label.toUpperCase()})</Text>
             </TouchableOpacity>
           </View>
-          <View style={appStyles.tabWrap}>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={appStyles.tabRow}>
-              {MODES.map((m) => {
-                const active = m.id === activeId;
-                return (
-                  <TouchableOpacity
-                    key={m.id}
-                    style={[appStyles.tab, active && appStyles.tabActive]}
-                    onPress={() => { haptics.tick(); setActiveId(m.id); }}
-                  >
-                    <Text style={[appStyles.tabIcon, active && appStyles.tabTextActive]}>{m.icon}</Text>
-                    <Text style={[appStyles.tabLabel, active && appStyles.tabTextActive]}>{m.label}</Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </ScrollView>
-          </View>
-        </>
-      )}
+        ) : (
+          <>
+            <View style={appStyles.header}>
+              <View>
+                <Text style={appStyles.brand}>OPEN FIDGET</Text>
+                <Text style={appStyles.subtitle}>Haptic Validation Lab v0</Text>
+              </View>
+              <TouchableOpacity
+                style={appStyles.blindBtn}
+                onPress={() => { haptics.medium(); setBlindMode(true); }}
+              >
+                <Text style={appStyles.blindBtnText}>◐ EYES-FREE</Text>
+              </TouchableOpacity>
+            </View>
+            <View style={appStyles.tabWrap}>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={appStyles.tabRow}>
+                {MODES.map((m) => {
+                  const active = m.id === activeId;
+                  return (
+                    <TouchableOpacity
+                      key={m.id}
+                      style={[appStyles.tab, active && appStyles.tabActive]}
+                      onPress={() => { haptics.tick(); setActiveId(m.id); }}
+                    >
+                      <Text style={[appStyles.tabIcon, active && appStyles.tabTextActive]}>{m.icon}</Text>
+                      <Text style={[appStyles.tabLabel, active && appStyles.tabTextActive]}>{m.label}</Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </>
+        )}
 
-      <View style={appStyles.stage}>
-        <ActiveComponent key={activeId} blindMode={blindMode} />
-      </View>
-    </SafeAreaView>
+        <View style={appStyles.stage}>
+          <ActiveComponent key={activeId} blindMode={blindMode} />
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
 // ─── Styles ──────────────────────────────────────────────────────────────────
 const appStyles = StyleSheet.create({
-  root: { flex: 1, backgroundColor: COLORS.bg, paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0 },
+  root: { flex: 1, backgroundColor: COLORS.bg },
   rootBlind: { backgroundColor: COLORS.blackout },
   header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 18, paddingTop: 10, paddingBottom: 10 },
   brand: { color: COLORS.text, fontSize: 18, fontWeight: '900', letterSpacing: 2 },

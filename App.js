@@ -1,14 +1,13 @@
 import React, { useState } from 'react';
 import {
-  SafeAreaView,
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
   StatusBar,
-  Platform,
 } from 'react-native';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { haptics } from './src/haptics';
 import { COLORS } from './src/theme';
 import SafeCracker from './src/modes/SafeCracker';
@@ -33,8 +32,9 @@ export default function App() {
   const ActiveComponent = activeMode.component;
 
   return (
-    <SafeAreaView style={[styles.root, blindMode && styles.rootBlind]}>
-      <StatusBar barStyle="light-content" backgroundColor={blindMode ? '#000000' : COLORS.bg} />
+    <SafeAreaProvider>
+      <SafeAreaView style={[styles.root, blindMode && styles.rootBlind]}>
+        <StatusBar barStyle="light-content" backgroundColor={blindMode ? '#000000' : COLORS.bg} />
 
       {blindMode ? (
         <View style={styles.blindTopBar}>
@@ -97,10 +97,11 @@ export default function App() {
         </>
       )}
 
-      <View style={styles.stage}>
-        <ActiveComponent key={activeId} blindMode={blindMode} />
-      </View>
-    </SafeAreaView>
+        <View style={styles.stage}>
+          <ActiveComponent key={activeId} blindMode={blindMode} />
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
   );
 }
 
@@ -108,7 +109,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
     backgroundColor: COLORS.bg,
-    paddingTop: Platform.OS === 'android' ? StatusBar.currentHeight || 0 : 0,
   },
   rootBlind: {
     backgroundColor: COLORS.blackout,

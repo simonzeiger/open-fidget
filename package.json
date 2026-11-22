@@ -12,7 +12,8 @@
     "expo-haptics": "*",
     "expo-sensors": "*",
     "react": "*",
-    "react-native": "*"
+    "react-native": "*",
+    "react-native-safe-area-context": "*"
   },
   "private": true
 }
