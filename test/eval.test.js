@@ -7,8 +7,11 @@ const os = require('node:os');
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 
-const { getMode, resolveMode } = require('../src/engine/registry');
+const { getMode } = require('../src/engine/registry');
+const { resolveMode } = require('../scripts/loadMode');
 const { evaluateMode } = require('../src/eval/evaluate');
+const { runRealisticProbes } = require('../src/eval/solvers');
+const { createSession } = require('../src/sim/runner');
 const { formatReport, formatAllReports } = require('../src/eval/reporter');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
@@ -93,6 +96,18 @@ test('evaluateMode validates all 5 v0 modes with zero crashes/leaks and detects 
     reportsById[modeId] = report;
   }
 
+  const safeStrictFindings = reportsById.safe.results
+    .find((r) => r.variant === 'strict')
+    .findings.map((f) => f.code);
+  assert.ok(
+    safeStrictFindings.includes('EDGE_REPOSITION_PUNISHES_USER'),
+    `Expected safe:strict to report EDGE_REPOSITION_PUNISHES_USER, got ${safeStrictFindings.join(', ')}`
+  );
+  assert.ok(
+    safeStrictFindings.includes('DOUBLE_THUNK_CANCELLED_ON_FAST_SWEEP'),
+    `Expected safe:strict to report DOUBLE_THUNK_CANCELLED_ON_FAST_SWEEP, got ${safeStrictFindings.join(', ')}`
+  );
+
   const huntFindings = reportsById.hunt.results[0].findings.map((f) => f.code);
   assert.ok(
     huntFindings.includes('COLD_TIMER_BLIND_SPOT'),
@@ -130,7 +145,7 @@ test('evaluateMode validates all 5 v0 modes with zero crashes/leaks and detects 
   assert.ok(allText.includes('marble:pegs'));
 });
 
-test('evaluateMode runs generic probe cleanly on custom mode ./src/engine/_template.js', () => {
+test('evaluateMode and runRealisticProbes run generic stress probes cleanly on custom mode ./src/engine/_template.js', () => {
   const templateMode = resolveMode('./src/engine/_template.js');
   const report = evaluateMode(templateMode, { seeds: 2 });
 
@@ -145,6 +160,167 @@ test('evaluateMode runs generic probe cleanly on custom mode ./src/engine/_templ
   assert.equal(codes.includes('BLIND_UNSOLVABLE'), false);
   assert.equal(result.fuzz.crashes, 0);
   assert.equal(result.fuzz.leakedTimers, 0);
+
+  // Verify runRealisticProbes generates input-driven probes on _template.js (pointer_down + pointer_cancel)
+  const templateProbes = runRealisticProbes(
+    () => createSession(templateMode, { variant: 'standard', seed: 3, humanProfile: 'typical' }),
+    templateMode,
+    'standard'
+  );
+  const templateProbeNames = templateProbes.map((p) => p.name);
+  for (const p of templateProbes) {
+    assert.equal(p.session.dispose().leakedTimers, 0);
+  }
+  assert.deepEqual(templateProbeNames, ['generic_rapid_tap_burst', 'generic_mid_gesture_cancel']);
+
+  // Also verify all 3 generic probes trigger when pointer_move/dial + pointer_down + pointer_cancel are declared
+  const customSweepMode = {
+    id: 'custom-dial-pad',
+    name: 'Custom Dial Pad',
+    kind: 'fidget',
+    inputs: ['pointer_down', 'pointer_move', 'pointer_up', 'pointer_cancel', 'dial'],
+    blindInstructions: 'Slide or turn dial.',
+    create(ctx) {
+      let step = 0;
+      return {
+        onInput(ev) {
+          if (ev.type === 'pointer_move') {
+            const next = Math.round((ev.x || 0) * 10);
+            if (next !== step) {
+              step = next;
+              ctx.haptics.tick({ cue: 'detent_tick' });
+            }
+          } else if (ev.type === 'pointer_down') {
+            ctx.haptics.light({ cue: 'touch' });
+          } else if (ev.type === 'dial') {
+            ctx.haptics.tick({ cue: 'dial_tick' });
+          }
+        },
+        getVisualState: () => ({ step }),
+        getEvalState: () => ({ score: 0, progress: step }),
+        dispose() {},
+      };
+    },
+  };
+  const customProbes = runRealisticProbes(
+    () => createSession(customSweepMode, { variant: 'default', seed: 1, humanProfile: 'typical' }),
+    customSweepMode,
+    'default'
+  );
+  const customProbeNames = customProbes.map((p) => p.name);
+  for (const p of customProbes) {
+    assert.equal(p.session.dispose().leakedTimers, 0);
+  }
+  assert.deepEqual(customProbeNames, [
+    'generic_fast_sweep',
+    'generic_rapid_tap_burst',
+    'generic_mid_gesture_cancel',
+  ]);
+});
+
+test('two-track evaluation treats snappy fidget/pacer buzz as info while catching notification & same-ms overlaps', () => {
+  // 1. Snappy tick fidget with high pulse density should PASS and downgrade ACOUSTIC_BUZZ_HIGH to info
+  const snappyFidgetMode = {
+    id: 'snappy-ratchet-fidget',
+    name: 'Snappy Ratchet Fidget',
+    kind: 'fidget',
+    variants: ['standard'],
+    inputs: ['pointer_down', 'pointer_move', 'pointer_up', 'pointer_cancel'],
+    blindInstructions: 'Slide rapidly to feel crisp tick detents.',
+    create(ctx) {
+      let clicks = 0;
+      let lastBucket = -1;
+      return {
+        onInput(ev) {
+          if (ev.type === 'pointer_down') {
+            clicks += 1;
+            ctx.haptics.tick({ cue: 'press_tick' });
+          } else if (ev.type === 'pointer_move') {
+            const bucket = Math.floor((ev.x || 0) * 40);
+            if (bucket !== lastBucket) {
+              lastBucket = bucket;
+              clicks += 1;
+              ctx.haptics.tick({ cue: 'ratchet_tick' });
+            }
+          }
+        },
+        getVisualState: () => ({ clicks }),
+        getEvalState: () => ({ score: clicks, progress: clicks }),
+        dispose() {},
+      };
+    },
+    blindSolver(blind) {
+      // Rapid 20ms tick ratcheting over 2s (>10 pulses/sec, 0 hard collisions since tick settle=15ms)
+      blind.step({ type: 'pointer_down', x: 0.02, y: 0.5 }, 20);
+      for (let i = 1; i <= 38; i += 1) {
+        blind.step({ type: 'pointer_move', x: 0.02 + (i / 38) * 0.96, y: 0.5 }, 20);
+      }
+      blind.step({ type: 'pointer_up', x: 0.98, y: 0.5 }, 120);
+      return { ratcheted: true };
+    },
+  };
+
+  const fidgetReport = evaluateMode(snappyFidgetMode, { seeds: 2 });
+  const fidgetRes = fidgetReport.results[0];
+  assert.equal(fidgetRes.variantKind, 'fidget');
+  assert.equal(fidgetRes.hygiene.hardCollisions, 0);
+  assert.equal(fidgetRes.verdict, 'PASS');
+  const buzzFinding = fidgetRes.findings.find((f) => f.code === 'ACOUSTIC_BUZZ_HIGH');
+  assert.ok(buzzFinding, 'Expected ACOUSTIC_BUZZ_HIGH diagnostic to be recorded on snappy fidget');
+  assert.equal(buzzFinding.severity, 'info');
+
+  // 2. Fidget that fires a notification overlap (`success` followed 40ms later by another pulse) or same-ms double-fire MUST be caught
+  const overlappingFidgetMode = {
+    id: 'overlapping-fidget',
+    name: 'Overlapping Fidget',
+    kind: 'fidget',
+    variants: ['standard'],
+    inputs: ['button_down', 'button_up'],
+    blindInstructions: 'Tap the button.',
+    create(ctx) {
+      let timer = null;
+      return {
+        onInput(ev) {
+          if (ev.type === 'button_down') {
+            ctx.haptics.success({ cue: 'notify' });
+            ctx.haptics.tick({ cue: 'same_ms_echo' });
+            timer = ctx.clock.setTimeout(() => {
+              timer = null;
+              ctx.haptics.tick({ cue: 'late_echo' });
+            }, 40);
+          }
+        },
+        getVisualState: () => ({}),
+        getEvalState: () => ({ score: 1, progress: 1 }),
+        dispose() {
+          if (timer !== null) {
+            ctx.clock.clearTimeout(timer);
+            timer = null;
+          }
+        },
+      };
+    },
+  };
+
+  const overlapReport = evaluateMode(overlappingFidgetMode, { seeds: 2 });
+  const overlapCodes = overlapReport.results[0].findings.map((f) => f.code);
+  assert.ok(
+    overlapCodes.includes('LRA_NOTIFICATION_OVERLAP'),
+    `Expected LRA_NOTIFICATION_OVERLAP, got ${overlapCodes.join(', ')}`
+  );
+  assert.ok(
+    overlapCodes.includes('LRA_SAME_MS_COLLISION'),
+    `Expected LRA_SAME_MS_COLLISION, got ${overlapCodes.join(', ')}`
+  );
+  assert.notEqual(overlapReport.results[0].verdict, 'PASS');
+
+  // 3. Sandbox switch & marble ridges should pass under Track 2 (tick/light snappy fidgets)
+  const sandboxReport = evaluateMode(getMode('sandbox'), { seeds: 2 });
+  const switchRes = sandboxReport.results.find((r) => r.variant === 'switch');
+  assert.equal(switchRes.verdict, 'PASS');
+  const marbleReport = evaluateMode(getMode('marble'), { seeds: 2 });
+  const ridgesRes = marbleReport.results.find((r) => r.variant === 'ridges');
+  assert.equal(ridgesRes.verdict, 'PASS');
 });
 
 test('evaluateMode invokes custom blindSolver(blind) with strict blind facade', () => {
@@ -226,11 +402,11 @@ test('evaluateMode invokes custom blindSolver(blind) with strict blind facade', 
 });
 
 test('scripts/validate.js CLI handles --json, --strict, and --all exit codes cleanly', () => {
-  const jsonRun = runCli(VALIDATE_SCRIPT, ['hunt', '--seeds', '2', '--json']);
+  const jsonRun = runCli(VALIDATE_SCRIPT, ['marble', '--variant', 'hole', '--seeds', '2', '--json']);
   assert.equal(jsonRun.status, 0);
   assert.equal(jsonRun.stderr, '');
   const parsed = JSON.parse(jsonRun.stdout);
-  assertReportSchema(parsed, 'hunt');
+  assertReportSchema(parsed, 'marble');
 
   const strictRun = runCli(VALIDATE_SCRIPT, ['hunt', '--seeds', '2', '--strict']);
   assert.equal(strictRun.status, 1);

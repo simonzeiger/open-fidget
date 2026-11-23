@@ -130,6 +130,23 @@ function validateModeDefinition(mode) {
   if (typeof mode.create !== 'function') {
     throw new Error(`Mode "${mode.id}" requires a "create(ctx, config)" function`);
   }
+  if (mode.actions !== undefined) {
+    if (!Array.isArray(mode.actions)) {
+      throw new Error(`Mode "${mode.id}" optional "actions" must be an array`);
+    }
+    for (let i = 0; i < mode.actions.length; i += 1) {
+      const action = mode.actions[i];
+      if (!action || typeof action !== 'object' || Array.isArray(action)) {
+        throw new Error(`Mode "${mode.id}" actions[${i}] must be an object { name, label }`);
+      }
+      if (typeof action.name !== 'string' || !action.name.trim()) {
+        throw new Error(`Mode "${mode.id}" actions[${i}].name must be a non-empty string`);
+      }
+      if (typeof action.label !== 'string' || !action.label.trim()) {
+        throw new Error(`Mode "${mode.id}" actions[${i}].label must be a non-empty string`);
+      }
+    }
+  }
   return true;
 }
 

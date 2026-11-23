@@ -15,6 +15,7 @@ import RhythmEcho from './src/modes/RhythmEcho';
 import VirtualMarble from './src/modes/VirtualMarble';
 import HotColdHunt from './src/modes/HotColdHunt';
 import FidgetSandbox from './src/modes/FidgetSandbox';
+import LabMode from './src/modes/LabMode';
 
 const MODES = [
   { id: 'safe', label: 'Safe', icon: '◎', component: SafeCracker },
@@ -22,6 +23,7 @@ const MODES = [
   { id: 'marble', label: 'Marble', icon: '●', component: VirtualMarble },
   { id: 'hunt', label: 'Sonar', icon: '◉', component: HotColdHunt },
   { id: 'sandbox', label: 'Fidget', icon: '⊞', component: FidgetSandbox },
+  { id: 'lab', label: 'Lab', icon: '◇', component: LabMode },
 ];
 
 export default function App() {

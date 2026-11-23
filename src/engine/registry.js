@@ -1,6 +1,5 @@
 'use strict';
 
-const path = require('path');
 const { validateModeDefinition } = require('./contract');
 const SafeCrackerMode = require('./safeCracker');
 const RhythmEchoMode = require('./rhythmEcho');
@@ -30,30 +29,9 @@ function listModeIds() {
   return MODE_LIST.map((m) => m.id);
 }
 
-/**
- * Resolves either a registered mode id (e.g. 'safe') or a path to a custom
- * mode module (e.g. './src/engine/_template.js') so agents can validate new
- * prototypes before registering them in the app.
- */
-function resolveMode(idOrPath) {
-  if (!idOrPath || typeof idOrPath !== 'string') {
-    throw new Error('Mode id or file path is required');
-  }
-  if (MODES[idOrPath]) {
-    return MODES[idOrPath];
-  }
-  const absPath = path.resolve(process.cwd(), idOrPath);
-  // eslint-disable-next-line import/no-dynamic-require, global-require
-  const loaded = require(absPath);
-  const mode = loaded && loaded.default ? loaded.default : loaded;
-  validateModeDefinition(mode);
-  return mode;
-}
-
 module.exports = {
   MODES,
   MODE_LIST,
   getMode,
   listModeIds,
-  resolveMode,
 };

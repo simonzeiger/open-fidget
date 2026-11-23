@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 'use strict';
 
-const { listModeIds, resolveMode } = require('../src/engine/registry');
+const { listModeIds } = require('../src/engine/registry');
+const { resolveMode } = require('./loadMode');
 const { evaluateMode, evaluateAll } = require('../src/eval/evaluate');
 const { formatReport, formatAllReports } = require('../src/eval/reporter');
 

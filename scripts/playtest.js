@@ -4,7 +4,9 @@
 const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
-const { getMode, listModeIds, resolveMode } = require('../src/engine/registry');
+const { getMode, listModeIds } = require('../src/engine/registry');
+const prototypes = require('../src/engine/prototypes');
+const { resolveMode } = require('./loadMode');
 const { createSession } = require('../src/sim/runner');
 
 const DEFAULT_SESSION_PATH = '/tmp/open-fidget-playtest.json';
@@ -39,7 +41,10 @@ function normalizeModeRef(modeIdOrPath) {
   if (!modeIdOrPath || typeof modeIdOrPath !== 'string') {
     throw new Error('Mode id or file path is required');
   }
-  if (getMode(modeIdOrPath)) {
+  if (
+    getMode(modeIdOrPath) ||
+    (Array.isArray(prototypes) && prototypes.some((m) => m && m.id === modeIdOrPath))
+  ) {
     return modeIdOrPath;
   }
   return path.resolve(process.cwd(), modeIdOrPath);

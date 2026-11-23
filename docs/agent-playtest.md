@@ -75,7 +75,7 @@ printf '%s\n' \
 | `button_down` / `button_up` | — | Dedicated press/hold input |
 | `dial` | `deltaSteps` (int) | Discrete rotary steps |
 | `imu` | `ax`, `ay`, `az` | Normalized tilt/acceleration |
-| `squeeze` | `force` (`0..1`) | Pressure input |
+| `squeeze` | `pressure` (`0..1`) | Pressure input, e.g. `{ type: 'squeeze', pressure: 0.7 }` |
 | `action` | `name`, `value?` | Mode actions (e.g., `start`, `reset`, `replay`) |
 
 ---
@@ -84,8 +84,9 @@ printf '%s\n' \
 
 Run automated evaluation across seeds and human profiles (`ideal`, `typical`, `pocket`):
 ```bash
-# Single registered mode or prototype file
+# Single registered mode, prototype id, or prototype file
 node scripts/validate.js safe
+node scripts/validate.js pulse-catch
 node scripts/validate.js ./src/engine/_template.js
 
 # All registered modes
@@ -94,6 +95,12 @@ node scripts/validate.js --all
 # Custom flags
 node scripts/validate.js safe --variant strict --seeds 12 --profiles ideal,typical --json --strict
 ```
+
+### Two-Track Evaluation (`puzzle` vs. `fidget` / `pacer`)
+
+`validate.js` evaluates modes according to their `kind` (or `variantKinds[variant]`):
+- **`puzzle`** — Requires solving/progressing strictly above a random baseline (`idealLift` / `typicalLift` / `pocketLift`) using only perceived haptic cues, alongside LRA hygiene and timer cleanup.
+- **`fidget` / `pacer`** — Does not require beating a random solver on score; instead checks responsive haptic output during active exploration, absence of dead-air stalls, LRA collision/acoustic hygiene, and clean `dispose()`.
 
 ### Interpreting the Scorecard & Verdicts
 
@@ -111,17 +118,23 @@ Key metrics to watch when tuning:
 
 ## 3. Prototyping a New Haptic Game
 
-1. **Copy the starter template:**
+1. **Copy the starter template & anchor the physical pitch:**
    ```bash
    cp src/engine/_template.js src/engine/myIdea.js
    ```
+   Before coding, anchor every new pitch with a **Hardware Input Metaphor** (what real physical mechanism the thumb is manipulating, e.g., detent dial, spring latch, ball-in-cup) and a **Flat-Glass Caveat** (how it compensates for smooth glass having no raised edges, mechanical stops, or continuous force feedback).
 2. **Design eyes-free first:**
    - Write `blindInstructions` before writing gameplay code. If you cannot explain the cues in 2–3 sentences without visuals, simplify the haptic vocabulary.
    - Give distinct meanings distinct haptic weights (e.g., `tick` for ambient detents, `medium`/`rigid` for boundaries/near-target, `heavy`/`success`/`error` for outcomes) and always include `{ cue: '...' }`.
    - Use `ctx.clock` and `ctx.rng()` exclusively—never `Date.now()`, global `setTimeout`, or `Math.random()`.
+   - **Optional hooks:**
+     - `actions: [{ name, label }]` — Optional validated array of action buttons surfaced automatically in the Lab prototype player (dispatched as `{ type: 'action', name }`).
+     - `blindSolver(blind, { variant, profileName, seed })` — Optional mode-specific blind solver hook used by `validate.js` (receives only the anti-leak `blind` facade—never ground truth).
 3. **Blind-playtest it yourself:**
    - Run `scripts/playtest.js start ./src/engine/myIdea.js --profile typical`, play purely from the `felt` outputs, then run `finish` to verify your mental model matched `finalEvalState`.
 4. **Tune & validate:**
    - Run `node scripts/validate.js ./src/engine/myIdea.js --strict` and iterate on spacing, tolerances, and feedback until it hits `PASS`.
-5. **Register when ready:**
-   - Add your mode to `src/engine/registry.js` and wire its visual wrapper in `src/modes/` when ready for Expo Go.
+5. **Publish to the Expo Go `Lab` tab (or graduate to a built-in mode):**
+   - Add vetted prototypes (`require('../myIdea')`) to `src/engine/prototypes/index.js` so they appear immediately in the Expo Go **Lab** tab (`PrototypePlayer`) for real-iPhone thumb testing, and record results in `docs/game-log.md`.
+   - When a prototype is ready to become a core built-in mode, add it to `src/engine/registry.js` and wire its dedicated UI wrapper in `src/modes/`.
+

@@ -1041,6 +1041,99 @@ function runRealisticProbes(createProbeSession, modeDef, variant) {
         meta: { retapTime, retapHapticsCount: retapRes.haptics.length },
       });
     }
+  } else {
+    const inputs = new Set(Array.isArray(modeDef.inputs) ? modeDef.inputs : []);
+
+    // Probe 1: Fast sweep across pointer surface or rapid dial ticks (20ms/step)
+    if (inputs.has('pointer_move') || inputs.has('dial')) {
+      const sweepSess = createProbeSession('generic_fast_sweep');
+      const blindSweep = createBlindFacade(sweepSess);
+      if (inputs.has('pointer_move')) {
+        if (inputs.has('pointer_down')) {
+          blindSweep.step({ type: 'pointer_down', x: 0.05, y: 0.5 }, 20);
+        }
+        for (let i = 1; i <= 18; i += 1) {
+          blindSweep.step({ type: 'pointer_move', x: 0.05 + (i / 18) * 0.9, y: 0.5 }, 20);
+        }
+        if (inputs.has('pointer_up')) {
+          blindSweep.step({ type: 'pointer_up', x: 0.95, y: 0.5 }, 100);
+        } else {
+          blindSweep.advance(100);
+        }
+      } else {
+        for (let i = 0; i < 18; i += 1) {
+          blindSweep.step({ type: 'dial', deltaSteps: 1 }, 20);
+        }
+        blindSweep.advance(100);
+      }
+      probes.push({
+        name: 'generic_fast_sweep',
+        session: sweepSess,
+        meta: { inputMode: inputs.has('pointer_move') ? 'pointer_move' : 'dial' },
+      });
+    }
+
+    // Probe 2: Rapid tap burst (6 quick 30ms press/release taps spaced 40ms apart)
+    if (inputs.has('pointer_down') || inputs.has('button_down')) {
+      const tapSess = createProbeSession('generic_rapid_tap_burst');
+      const blindTap = createBlindFacade(tapSess);
+      const usePointer = inputs.has('pointer_down');
+      const downType = usePointer ? 'pointer_down' : 'button_down';
+      const upType = usePointer ? 'pointer_up' : 'button_up';
+      const hasUp = inputs.has(upType);
+
+      for (let i = 0; i < 6; i += 1) {
+        const downEvent = usePointer ? { type: downType, x: 0.5, y: 0.5 } : { type: downType };
+        blindTap.step(downEvent, 30);
+        if (hasUp) {
+          const upEvent = usePointer ? { type: upType, x: 0.5, y: 0.5 } : { type: upType };
+          blindTap.step(upEvent, 40);
+        } else {
+          blindTap.advance(40);
+        }
+      }
+      blindTap.advance(120);
+      probes.push({
+        name: 'generic_rapid_tap_burst',
+        session: tapSess,
+        meta: { inputMode: downType, tapCount: 6 },
+      });
+    }
+
+    // Probe 3: Mid-gesture cancel / early interrupt (advance 120ms, fire cancel or early tap, advance 500ms)
+    if (inputs.has('pointer_cancel') || inputs.has('pointer_down')) {
+      const cancelSess = createProbeSession('generic_mid_gesture_cancel');
+      const blindCancel = createBlindFacade(cancelSess);
+      if (inputs.has('pointer_down')) {
+        blindCancel.step({ type: 'pointer_down', x: 0.25, y: 0.5 }, 40);
+      }
+      if (inputs.has('pointer_move')) {
+        blindCancel.step({ type: 'pointer_move', x: 0.55, y: 0.5 }, 80);
+      } else {
+        blindCancel.advance(80);
+      }
+
+      const cancelTime = blindCancel.getBlindHeader().t;
+      if (inputs.has('pointer_cancel')) {
+        blindCancel.step({ type: 'pointer_cancel' }, 500);
+      } else {
+        blindCancel.step({ type: 'pointer_down', x: 0.55, y: 0.5 }, 40);
+        if (inputs.has('pointer_up')) {
+          blindCancel.step({ type: 'pointer_up', x: 0.55, y: 0.5 }, 460);
+        } else {
+          blindCancel.advance(460);
+        }
+      }
+
+      probes.push({
+        name: 'generic_mid_gesture_cancel',
+        session: cancelSess,
+        meta: {
+          cancelTime,
+          interruptType: inputs.has('pointer_cancel') ? 'pointer_cancel' : 'early_tap',
+        },
+      });
+    }
   }
 
   return probes;

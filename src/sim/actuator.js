@@ -9,6 +9,25 @@
 const HARD_COLLISION_MS = 35;
 const TIGHT_GAP_MS = 55;
 
+const HAPTIC_SETTLE_MS = Object.freeze({
+  tick: 15,
+  light: 18,
+  soft: 22,
+  medium: 25,
+  rigid: 25,
+  heavy: 35,
+  success: 180,
+  warning: 200,
+  error: 240,
+});
+
+function getSettleWindowMs(type) {
+  if (typeof type === 'string' && Object.prototype.hasOwnProperty.call(HAPTIC_SETTLE_MS, type)) {
+    return HAPTIC_SETTLE_MS[type];
+  }
+  return HARD_COLLISION_MS;
+}
+
 const HAPTIC_ENERGY = Object.freeze({
   tick: 0.15,
   soft: 0.25,
@@ -52,8 +71,9 @@ function normalizeEvents(events) {
 
 /**
  * Models physical LRA behavior on a sequence of raw haptic events.
- * Pulses arriving less than HARD_COLLISION_MS after the preceding pulse are
- * marked `smeared: true` without mutating the input array or objects.
+ * Pulses arriving before the preceding pulse's type-aware settling window
+ * (`getSettleWindowMs(prevEvent.type)`) are marked `smeared: true` without
+ * mutating the input array or objects.
  *
  * @param {Array<{t: number, type: string, cue?: string|null, smeared?: boolean}>} events
  * @returns {Array<{t: number, type: string, smeared: boolean}>}
@@ -62,25 +82,29 @@ function applyActuatorFilter(events) {
   const ordered = normalizeEvents(events);
   const filtered = [];
   let prevT = null;
+  let prevType = null;
 
   for (let i = 0; i < ordered.length; i += 1) {
     const { ev, t } = ordered[i];
-    const gapMs = prevT === null ? Infinity : t - prevT;
-    const isCollision = prevT !== null && gapMs < HARD_COLLISION_MS;
+    const type = ev && typeof ev.type === 'string' ? ev.type : 'unknown';
+    const gapMs = prevT === null ? Infinity : Math.max(0, t - prevT);
+    const settleMs = prevT === null ? 0 : getSettleWindowMs(prevType);
+    const isCollision = prevT !== null && gapMs < settleMs;
     filtered.push({
       ...ev,
       t,
       smeared: Boolean((ev && ev.smeared) || isCollision),
     });
     prevT = t;
+    prevType = type;
   }
 
   return filtered;
 }
 
 /**
- * Analyzes a raw haptic trace for LRA collisions, tight gaps, acoustic buzz density,
- * type distribution, and cue-to-type mapping.
+ * Analyzes a raw haptic trace for type-aware LRA collisions, tight gaps,
+ * acoustic buzz density, type distribution, and cue-to-type mapping.
  *
  * @param {Array<{t: number, type: string, cue?: string|null}>} events
  * @param {number} durationMs
@@ -122,28 +146,32 @@ function analyzeActuatorTrace(events, durationMs) {
           ? prev.ev.cue
           : null;
       const gapMs = roundMetric(Math.max(0, t - prev.t));
+      const settleMs = getSettleWindowMs(prevType);
+      const tightCeilingMs = Math.max(TIGHT_GAP_MS, settleMs + 20);
 
       if (minGapMs === null || gapMs < minGapMs) {
         minGapMs = gapMs;
       }
 
-      if (gapMs < HARD_COLLISION_MS) {
+      if (gapMs < settleMs) {
         hardCollisions.push({
           index: origIndex,
           t,
           prevT: prev.t,
           gapMs,
+          settleMs,
           prevType,
           type,
           prevCue,
           cue,
         });
-      } else if (gapMs < TIGHT_GAP_MS) {
+      } else if (gapMs < tightCeilingMs) {
         tightGaps.push({
           index: origIndex,
           t,
           prevT: prev.t,
           gapMs,
+          settleMs,
           prevType,
           type,
           prevCue,
@@ -206,8 +234,10 @@ function analyzeActuatorTrace(events, durationMs) {
 module.exports = {
   HARD_COLLISION_MS,
   TIGHT_GAP_MS,
+  HAPTIC_SETTLE_MS,
   HAPTIC_ENERGY,
   PERCEPTUAL_LABEL,
+  getSettleWindowMs,
   analyzeActuatorTrace,
   applyActuatorFilter,
 };

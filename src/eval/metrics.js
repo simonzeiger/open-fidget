@@ -5,10 +5,16 @@
  * phase-transition, and lifecycle hygiene diagnostics (`src/eval/metrics.js`).
  */
 
-const { analyzeActuatorTrace, HARD_COLLISION_MS, TIGHT_GAP_MS } = require('../sim/actuator');
+const {
+  analyzeActuatorTrace,
+  HARD_COLLISION_MS,
+  TIGHT_GAP_MS,
+  getSettleWindowMs,
+} = require('../sim/actuator');
 
 const ACTIVE_DEAD_AIR_WARN_MS = 450;
 const ACTIVE_DEAD_AIR_ERROR_MS = 900;
+const NOTIFICATION_TYPES = new Set(['success', 'warning', 'error']);
 
 function round2(n) {
   return Math.round(n * 100) / 100;
@@ -21,6 +27,13 @@ function addFinding(findings, severity, code, message, evidence) {
     message,
     evidence: evidence || {},
   });
+}
+
+function isNotificationCollision(collision) {
+  return (
+    collision &&
+    (NOTIFICATION_TYPES.has(collision.prevType) || NOTIFICATION_TYPES.has(collision.type))
+  );
 }
 
 /**
@@ -116,6 +129,16 @@ function computeActiveDeadAir(trace, modeId, variant) {
 /**
  * Aggregates actuator, dead-air, cue-ambiguity, and mode-specific probe
  * diagnostics across all evaluated traces for a single mode variant.
+ *
+ * Implements Two-Track Evaluation:
+ * - Track 1 (`variantKind === 'puzzle'`): full solvability, solver lift,
+ *   pocket-noise degradation, active dead air, cue distinguishability, and
+ *   type-aware LRA collision checks.
+ * - Track 2 (`variantKind === 'fidget' || variantKind === 'pacer'`): safety &
+ *   tactile sanity focus — 0 crashes, 0 leaked timers, non-zero responsive
+ *   haptics, notification overlaps & severe same-ms collisions caught, while
+ *   non-notification high-speed scrub/click density (`ACOUSTIC_BUZZ_HIGH` on
+ *   rapid stress traces) is downgraded to `info`.
  */
 function analyzeVariantDiagnostics({
   modeDef,
@@ -127,6 +150,7 @@ function analyzeVariantDiagnostics({
   fuzzResult,
 }) {
   const findings = [];
+  const isFidgetTrack = variantKind === 'fidget' || variantKind === 'pacer';
 
   // Merge raw traces from ideal + typical + pocket + probes for structural hygiene
   const allRawHaptics = [];
@@ -141,6 +165,11 @@ function analyzeVariantDiagnostics({
   let maxDeadAirDetail = null;
   let worstAcousticRisk = 'low';
   const riskOrder = { low: 0, moderate: 1, high: 2 };
+
+  let notificationCollisions = 0;
+  let sameMsCollisions = 0;
+  let highBuzzFromStressProbeOnly = false;
+  let highBuzzFromNormalSolver = false;
 
   const allTraceEntries = [];
   for (const profileName of Object.keys(profileRuns)) {
@@ -160,6 +189,8 @@ function analyzeVariantDiagnostics({
 
   // Track worst collision example for actionable evidence
   let sampleCollision = null;
+  let sampleNotificationCollision = null;
+  let sampleSameMsCollision = null;
   let sampleTightGap = null;
 
   for (const entry of allTraceEntries) {
@@ -170,8 +201,22 @@ function analyzeVariantDiagnostics({
     totalHardCollisions += act.hardCollisions.length;
     totalTightGaps += act.tightGaps.length;
 
-    if (!sampleCollision && act.hardCollisions.length > 0) {
-      sampleCollision = { source: entry.source, ...act.hardCollisions[0] };
+    for (const c of act.hardCollisions) {
+      if (!sampleCollision) {
+        sampleCollision = { source: entry.source, ...c };
+      }
+      if (isNotificationCollision(c)) {
+        notificationCollisions += 1;
+        if (!sampleNotificationCollision) {
+          sampleNotificationCollision = { source: entry.source, ...c };
+        }
+      }
+      if (c.gapMs <= 1) {
+        sameMsCollisions += 1;
+        if (!sampleSameMsCollision) {
+          sampleSameMsCollision = { source: entry.source, ...c };
+        }
+      }
     }
     if (!sampleTightGap && act.tightGaps.length > 0) {
       sampleTightGap = { source: entry.source, ...act.tightGaps[0] };
@@ -180,9 +225,11 @@ function analyzeVariantDiagnostics({
     if (act.minGapMs !== null && (minGapMs === null || act.minGapMs < minGapMs)) {
       minGapMs = act.minGapMs;
     }
-    // Only count sustained acoustic density on regular solver traces >= 2000ms
-    // (short 400ms stress probes like rapid_switch_burst are meant to test LRA collisions, not sustained room buzz)
-    if (entry.source.startsWith('solver:') || (tr.durationMs || 0) >= 2000) {
+
+    const isSolverTrace = entry.source.startsWith('solver:');
+    const isLongTrace = (tr.durationMs || 0) >= 2000;
+    // Only count sustained acoustic density on regular solver traces or long traces >= 2000ms
+    if (isSolverTrace || isLongTrace) {
       if (act.pulsesPerSecond > maxPulsesPerSec) {
         maxPulsesPerSec = act.pulsesPerSecond;
       }
@@ -192,6 +239,12 @@ function analyzeVariantDiagnostics({
       if (riskOrder[act.acousticRisk] > riskOrder[worstAcousticRisk]) {
         worstAcousticRisk = act.acousticRisk;
       }
+      if (act.acousticRisk === 'high') {
+        if (isSolverTrace) highBuzzFromNormalSolver = true;
+        else highBuzzFromStressProbeOnly = true;
+      }
+    } else if (isFidgetTrack && act.acousticRisk === 'high') {
+      highBuzzFromStressProbeOnly = true;
     }
 
     for (const h of tr.rawHaptics || []) {
@@ -220,7 +273,7 @@ function analyzeVariantDiagnostics({
 
   const ambiguousCueGroups = analyzeCueAmbiguity(normalizedCueToTypes, allRawHaptics);
 
-  // 1. Fuzz & lifecycle checks
+  // 1. Fuzz & lifecycle checks (strict across BOTH tracks)
   if (fuzzResult.crashes > 0) {
     addFinding(
       findings,
@@ -249,48 +302,117 @@ function analyzeVariantDiagnostics({
     );
   }
 
-  // 2. Hard LRA collisions (<35ms)
-  if (totalHardCollisions > 0) {
-    const severity = totalHardCollisions >= 3 ? 'error' : 'warn';
-    addFinding(
-      findings,
-      severity,
-      'LRA_HARD_COLLISION',
-      `${totalHardCollisions} LRA hard collision(s) (<${HARD_COLLISION_MS}ms gap) risk smearing pulses together`,
-      {
-        hardCollisions: totalHardCollisions,
-        minGapMs,
-        sample: sampleCollision,
-      }
-    );
-  } else if (totalTightGaps >= 3) {
-    addFinding(
-      findings,
-      'warn',
-      'LRA_TIGHT_GAPS',
-      `${totalTightGaps} tight pulse gap(s) (<${TIGHT_GAP_MS}ms) may sound buzzier on some phones`,
-      {
-        tightGaps: totalTightGaps,
-        minGapMs,
-        sample: sampleTightGap,
-      }
-    );
+  // 2. Type-aware LRA collisions & notification overlap checks
+  if (isFidgetTrack) {
+    // Track 2 (fidget/pacer):
+    // - Always catch notification overlaps (success/warning/error colliding with follow-ups)
+    // - Always catch severe same-ms collisions (<=1ms double-fires)
+    // - Minor non-notification rapid flick/click overlaps (e.g. 20ms slider flick) do not fail a snappy fidget toy
+    if (notificationCollisions > 0) {
+      addFinding(
+        findings,
+        notificationCollisions >= 2 ? 'error' : 'warn',
+        'LRA_NOTIFICATION_OVERLAP',
+        `${notificationCollisions} notification haptic(s) (success/warning/error) collided within settling window of another pulse`,
+        {
+          notificationCollisions,
+          sample: sampleNotificationCollision,
+        }
+      );
+    }
+    if (sameMsCollisions > 0) {
+      addFinding(
+        findings,
+        sameMsCollisions >= 3 ? 'error' : 'warn',
+        'LRA_SAME_MS_COLLISION',
+        `${sameMsCollisions} severe same-millisecond pulse collision(s) detected`,
+        {
+          sameMsCollisions,
+          minGapMs,
+          sample: sampleSameMsCollision,
+        }
+      );
+    }
+    const otherHardCollisions = totalHardCollisions - notificationCollisions - sameMsCollisions;
+    if (otherHardCollisions > 0 && notificationCollisions === 0 && sameMsCollisions === 0) {
+      const sampleSettle = sampleCollision && sampleCollision.settleMs ? sampleCollision.settleMs : HARD_COLLISION_MS;
+      addFinding(
+        findings,
+        'warn',
+        'LRA_HARD_COLLISION',
+        `${totalHardCollisions} rapid-input LRA collision(s) (<${sampleSettle}ms type settle window) detected during stress motion`,
+        {
+          hardCollisions: totalHardCollisions,
+          minGapMs,
+          sample: sampleCollision,
+        }
+      );
+    }
+  } else {
+    // Track 1 (puzzle): Full type-aware LRA collision & tight-gap checks
+    if (totalHardCollisions > 0) {
+      const severity = totalHardCollisions >= 3 || notificationCollisions > 0 ? 'error' : 'warn';
+      const settleHint =
+        sampleCollision && sampleCollision.settleMs ? sampleCollision.settleMs : HARD_COLLISION_MS;
+      addFinding(
+        findings,
+        severity,
+        'LRA_HARD_COLLISION',
+        `${totalHardCollisions} LRA hard collision(s) (<${settleHint}ms type settle window) risk smearing pulses together`,
+        {
+          hardCollisions: totalHardCollisions,
+          notificationCollisions,
+          minGapMs,
+          sample: sampleCollision,
+        }
+      );
+    } else if (totalTightGaps >= 3) {
+      const tightSampleSettle =
+        sampleTightGap && sampleTightGap.settleMs ? sampleTightGap.settleMs : HARD_COLLISION_MS;
+      addFinding(
+        findings,
+        'warn',
+        'LRA_TIGHT_GAPS',
+        `${totalTightGaps} tight pulse gap(s) (<${Math.max(TIGHT_GAP_MS, tightSampleSettle + 20)}ms) may sound buzzier on some phones`,
+        {
+          tightGaps: totalTightGaps,
+          minGapMs,
+          sample: sampleTightGap,
+        }
+      );
+    }
   }
 
   // 3. Acoustic / Pocket-discretion density check
   if (worstAcousticRisk === 'high') {
-    addFinding(
-      findings,
-      'warn',
-      'ACOUSTIC_BUZZ_HIGH',
-      `High haptic pulse/energy density (${round2(maxPulsesPerSec)} pulses/s, ${round2(maxEnergyPerSec)} energy/s) may be audible in quiet rooms`,
-      { pulsesPerSecond: round2(maxPulsesPerSec), energyPerSecond: round2(maxEnergyPerSec) }
-    );
+    if (isFidgetTrack) {
+      // Track 2: downgrade non-notification high-speed scrub/click density to `info` rather than failing/penalizing a snappy fidget toy
+      addFinding(
+        findings,
+        'info',
+        'ACOUSTIC_BUZZ_HIGH',
+        `High tactile pulse density during rapid fidgeting (${round2(maxPulsesPerSec)} pulses/s, ${round2(maxEnergyPerSec)} energy/s)`,
+        {
+          pulsesPerSecond: round2(maxPulsesPerSec),
+          energyPerSecond: round2(maxEnergyPerSec),
+          fromNormalSolver: highBuzzFromNormalSolver,
+          fromStressProbe: highBuzzFromStressProbeOnly,
+        }
+      );
+    } else {
+      addFinding(
+        findings,
+        'warn',
+        'ACOUSTIC_BUZZ_HIGH',
+        `High haptic pulse/energy density (${round2(maxPulsesPerSec)} pulses/s, ${round2(maxEnergyPerSec)} energy/s) may be audible in quiet rooms`,
+        { pulsesPerSecond: round2(maxPulsesPerSec), energyPerSecond: round2(maxEnergyPerSec) }
+      );
+    }
   }
 
   // 4. Active Exploration Dead Air check
-  // Note: for virtualMarble `hole`, open-floor rolling has no ridges/pegs by design (only wall/hole clicks),
-  // so dead-air silence during slow cross-tray rolling is reported as a tactile-gradient warning rather than a crash-grade error.
+  // Track 1 (puzzle): Full active dead air enforcement.
+  // Track 2 (fidget/pacer): Pacers intentionally hold silence between cues; fidgets only warn if completely unresponsive (>900ms).
   if (modeDef.id === 'marble' && variant === 'hole') {
     if (maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_WARN_MS) {
       addFinding(
@@ -301,31 +423,49 @@ function analyzeVariantDiagnostics({
         maxDeadAirDetail
       );
     }
-  } else if (maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_ERROR_MS) {
-    addFinding(
-      findings,
-      'error',
-      'ACTIVE_DEAD_AIR',
-      `Active exploration went silent for ${maxActiveDeadAirMs}ms (>${ACTIVE_DEAD_AIR_ERROR_MS}ms) while user was actively interacting`,
-      maxDeadAirDetail
-    );
-  } else if (maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_WARN_MS) {
+  } else if (!isFidgetTrack) {
+    if (maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_ERROR_MS) {
+      addFinding(
+        findings,
+        'error',
+        'ACTIVE_DEAD_AIR',
+        `Active exploration went silent for ${maxActiveDeadAirMs}ms (>${ACTIVE_DEAD_AIR_ERROR_MS}ms) while user was actively interacting`,
+        maxDeadAirDetail
+      );
+    } else if (maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_WARN_MS) {
+      addFinding(
+        findings,
+        'warn',
+        'ACTIVE_DEAD_AIR',
+        `Active exploration hit ${maxActiveDeadAirMs}ms of silent gap (>${ACTIVE_DEAD_AIR_WARN_MS}ms) without tactile feedback`,
+        maxDeadAirDetail
+      );
+    }
+  } else if (variantKind !== 'pacer' && maxActiveDeadAirMs >= ACTIVE_DEAD_AIR_ERROR_MS) {
     addFinding(
       findings,
       'warn',
       'ACTIVE_DEAD_AIR',
-      `Active exploration hit ${maxActiveDeadAirMs}ms of silent gap (>${ACTIVE_DEAD_AIR_WARN_MS}ms) without tactile feedback`,
+      `Fidget interaction went silent for ${maxActiveDeadAirMs}ms (>${ACTIVE_DEAD_AIR_ERROR_MS}ms) while user was actively interacting`,
       maxDeadAirDetail
     );
   }
 
   // 5. Cue distinguishability check
-  if (ambiguousCueGroups.length > 0) {
+  if (ambiguousCueGroups.length > 0 && variantKind === 'puzzle') {
     addFinding(
       findings,
       'warn',
       'CUE_COLLISION',
       `Distinct gameplay cues share identical single haptic type without rhythm separation: ${ambiguousCueGroups.map((g) => `${g.hapticType}=[${g.cues.join(', ')}]`).join('; ')}`,
+      { groups: ambiguousCueGroups }
+    );
+  } else if (ambiguousCueGroups.length > 0 && isFidgetTrack) {
+    addFinding(
+      findings,
+      'info',
+      'CUE_COLLISION',
+      `Distinct fidget cues share identical single haptic type: ${ambiguousCueGroups.map((g) => `${g.hapticType}=[${g.cues.join(', ')}]`).join('; ')}`,
       { groups: ambiguousCueGroups }
     );
   }
@@ -346,7 +486,7 @@ function analyzeVariantDiagnostics({
     (r) => r.solverNotes && r.solverNotes.usedGenericSolver
   );
 
-  // Puzzle learnability / solver lift check
+  // Puzzle learnability / solver lift check (Track 1 only)
   if (variantKind === 'puzzle' && baselineStats) {
     if (idealScore <= 0 && usedGenericSolver) {
       addFinding(
@@ -479,7 +619,9 @@ function analyzeVariantDiagnostics({
       );
     }
 
-    // Check quick 30ms tap feel: press_down (light) + enter_dot (rigid) 30ms apart -> LRA collision!
+    // Check quick 30ms tap feel: press_down (light) + enter_dot (rigid) 30ms apart
+    // Note: with type-aware settling windows (`light` = 18ms), 30ms avoids hard LRA smearing
+    // unless `press_down` actually collided under getSettleWindowMs('light').
     const quickProbe = probeRuns.find((p) => p.name === 'quick_tap_30ms');
     if (quickProbe) {
       const act = quickProbe.trace.actuator;
@@ -491,7 +633,7 @@ function analyzeVariantDiagnostics({
           findings,
           'warn',
           'QUICK_TAP_LRA_COLLISION',
-          `Realistic 30ms tap emits \`press_down\` (light) + \`enter_dot\` (rigid) ${tapCollisions[0].gapMs}ms apart (<${HARD_COLLISION_MS}ms LRA smearing window)`,
+          `Realistic 30ms tap emits \`press_down\` (light) + \`enter_dot\` (rigid) ${tapCollisions[0].gapMs}ms apart (<${getSettleWindowMs('light')}ms LRA smearing window)`,
           { collisions: tapCollisions.length, sampleGapMs: tapCollisions[0].gapMs }
         );
       }
@@ -570,7 +712,7 @@ function analyzeVariantDiagnostics({
             findings,
             'warn',
             'RAPID_SWITCH_COLLISION',
-            `Rapid 30ms fidget clicking collides \`switch_down\` (rigid) and \`switch_up\` (light) at ${collisions[0].gapMs}ms (<${HARD_COLLISION_MS}ms)`,
+            `Rapid 30ms fidget clicking collides \`switch_down\` (rigid) and \`switch_up\` (light) at ${collisions[0].gapMs}ms (<${getSettleWindowMs('rigid')}ms)`,
             { collisions: collisions.length, minGapMs: burstProbe.trace.actuator.minGapMs }
           );
         }
@@ -584,7 +726,7 @@ function analyzeVariantDiagnostics({
             findings,
             'warn',
             'SLIDER_FLICK_COLLISION',
-            `Brisk slider drag triggers ${collisions.length} LRA collision(s) (<${HARD_COLLISION_MS}ms) across adjacent detents`,
+            `Brisk slider drag triggers ${collisions.length} LRA collision(s) (<${getSettleWindowMs('medium')}ms) across adjacent detents`,
             { collisions: collisions.length, minGapMs: flickProbe.trace.actuator.minGapMs }
           );
         }
@@ -616,7 +758,7 @@ function analyzeVariantDiagnostics({
     }
   }
 
-  // Generic custom mode check: ensure at least some responsive haptic output during exploration
+  // Generic & Track-2 responsive haptics check: ensure non-zero responsive haptics during exploration
   if (totalPulses === 0) {
     addFinding(
       findings,
@@ -645,10 +787,10 @@ function analyzeVariantDiagnostics({
     }
   }
 
-  // Factor puzzle performance & noise resilience into score
+  // Factor puzzle performance & noise resilience into score (Track 1 only)
   if (variantKind === 'puzzle' && baselineStats) {
-    if (idealScore <= 0) score -= 25;
-    else if (baselineStats.idealLift <= 0.15) score -= 12;
+    if (idealScore <= 0 && !usedGenericSolver) score -= 25;
+    else if (idealScore > 0 && !usedGenericSolver && baselineStats.idealLift <= 0.15) score -= 12;
     if (idealScore > 0 && pocketScore < idealScore * 0.7) {
       score -= Math.min(12, Math.round((1 - pocketScore / idealScore) * 15));
     }

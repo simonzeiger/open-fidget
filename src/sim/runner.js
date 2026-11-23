@@ -14,7 +14,7 @@ const {
 } = require('../engine/contract');
 const { createVirtualClock } = require('./clock');
 const { createRng } = require('./rng');
-const { HARD_COLLISION_MS, analyzeActuatorTrace } = require('./actuator');
+const { getSettleWindowMs, analyzeActuatorTrace } = require('./actuator');
 const { createHumanModel } = require('./humanModel');
 
 const PULSE_WINDOW_MS = 250;
@@ -261,7 +261,7 @@ function createSession(modeDef, options = {}) {
 
     const prevRaw = rawHaptics.length > 0 ? rawHaptics[rawHaptics.length - 1] : null;
     const smeared = Boolean(
-      actuatorFilter && prevRaw !== null && t - prevRaw.t < HARD_COLLISION_MS
+      actuatorFilter && prevRaw !== null && t - prevRaw.t < getSettleWindowMs(prevRaw.type)
     );
 
     const rawEvent = { t, type, cue, smeared };
