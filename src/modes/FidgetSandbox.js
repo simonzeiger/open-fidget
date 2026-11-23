@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef } from 'react';
 import {
   View,
   Text,
@@ -8,76 +8,35 @@ import {
   PanResponder,
   TouchableOpacity,
 } from 'react-native';
-import { haptics } from '../haptics';
 import { COLORS } from '../theme';
+import { useModeEngine } from './useModeEngine';
+import FidgetSandboxMode from '../engine/fidgetSandbox';
 
 const SWITCH_FEELS = [
-  { id: 'clicky', label: 'CLICKY', down: 'rigid', up: 'light' },
-  { id: 'thock', label: 'THOCK', down: 'heavy', up: 'soft' },
-  { id: 'subtle', label: 'SUBTLE', down: 'tick', up: 'tick' },
+  { id: 'clicky', label: 'CLICKY' },
+  { id: 'thock', label: 'THOCK' },
+  { id: 'subtle', label: 'SUBTLE' },
 ];
 
-const SLIDER_STOPS = 12;
-const BUBBLE_COUNT = 12;
-
 export default function FidgetSandbox({ blindMode }) {
-  const [switchFeel, setSwitchFeel] = useState('clicky');
-  const [clicks, setClicks] = useState(0);
-  const [switchDown, setSwitchDown] = useState(false);
+  const { state, sendInput } = useModeEngine(FidgetSandboxMode);
+  const {
+    switchFeel,
+    clicks,
+    switchDown,
+    sliderStep,
+    sliderStops,
+    popped,
+    breathing,
+    breathPhase,
+  } = state;
 
-  const [sliderStep, setSliderStep] = useState(6);
   const sliderWidthRef = useRef(260);
-  const sliderStepRef = useRef(6);
-
-  const [popped, setPopped] = useState(() => Array(BUBBLE_COUNT).fill(false));
-  const [breathing, setBreathing] = useState(false);
-  const [breathPhase, setBreathPhase] = useState('IDLE');
-  const breathTimerRef = useRef(null);
-
-  useEffect(() => {
-    if (!breathing) {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
-      setBreathPhase('IDLE');
-      return;
-    }
-
-    // 4-7-8 breathing cycle (19s total), tick every 500ms
-    let halfSec = 0;
-    const tickBreath = () => {
-      const sec = (halfSec * 0.5) % 19;
-      if (sec < 4) {
-        setBreathPhase(`INHALE (${Math.ceil(4 - sec)}s)`);
-        haptics.soft();
-      } else if (sec < 11) {
-        setBreathPhase(`HOLD (${Math.ceil(11 - sec)}s)`);
-        if (sec === 4) haptics.medium();
-      } else {
-        setBreathPhase(`EXHALE (${Math.ceil(19 - sec)}s)`);
-        if (halfSec % 2 === 0) haptics.light();
-      }
-      halfSec += 1;
-    };
-
-    tickBreath();
-    breathTimerRef.current = setInterval(tickBreath, 500);
-    return () => {
-      if (breathTimerRef.current) clearInterval(breathTimerRef.current);
-    };
-  }, [breathing]);
 
   const updateSliderFromX = (x) => {
     const w = Math.max(1, sliderWidthRef.current);
     const ratio = Math.max(0, Math.min(1, x / w));
-    const step = Math.round(ratio * (SLIDER_STOPS - 1));
-    if (step !== sliderStepRef.current) {
-      sliderStepRef.current = step;
-      setSliderStep(step);
-      if (step === 0 || step === SLIDER_STOPS - 1) {
-        haptics.heavy();
-      } else {
-        haptics.medium();
-      }
-    }
+    sendInput({ type: 'action', name: 'slider_ratio', value: ratio });
   };
 
   const sliderResponder = useRef(
@@ -92,35 +51,13 @@ export default function FidgetSandbox({ blindMode }) {
 
   const feelObj = SWITCH_FEELS.find((f) => f.id === switchFeel) || SWITCH_FEELS[0];
 
-  const handlePop = (idx) => {
-    if (popped[idx]) return;
-    haptics.rigid();
-    const next = [...popped];
-    next[idx] = true;
-    setPopped(next);
-
-    if (next.every(Boolean)) {
-      setTimeout(() => {
-        haptics.success();
-        setPopped(Array(BUBBLE_COUNT).fill(false));
-      }, 260);
-    }
-  };
-
   if (blindMode) {
     // Full-screen eyes-free tactile clicker + optional breathing pulse
     return (
       <Pressable
         style={styles.blindFull}
-        onPressIn={() => {
-          setSwitchDown(true);
-          haptics[feelObj.down]();
-          setClicks((c) => c + 1);
-        }}
-        onPressOut={() => {
-          setSwitchDown(false);
-          haptics[feelObj.up]();
-        }}
+        onPressIn={() => sendInput({ type: 'action', name: 'switch_down' })}
+        onPressOut={() => sendInput({ type: 'action', name: 'switch_up' })}
       >
         <Text style={styles.blindWhisper}>
           {breathing ? `BREATHING • ${breathPhase}` : `SWITCH SANDBOX • ${feelObj.label}`}
@@ -146,10 +83,9 @@ export default function FidgetSandbox({ blindMode }) {
             <TouchableOpacity
               key={f.id}
               style={[styles.miniPill, switchFeel === f.id && styles.miniPillActive]}
-              onPress={() => {
-                haptics.tick();
-                setSwitchFeel(f.id);
-              }}
+              onPress={() =>
+                sendInput({ type: 'action', name: 'set_switch_feel', value: f.id })
+              }
             >
               <Text style={[styles.miniPillText, switchFeel === f.id && styles.miniPillTextActive]}>
                 {f.label}
@@ -158,15 +94,8 @@ export default function FidgetSandbox({ blindMode }) {
           ))}
         </View>
         <Pressable
-          onPressIn={() => {
-            setSwitchDown(true);
-            haptics[feelObj.down]();
-            setClicks((c) => c + 1);
-          }}
-          onPressOut={() => {
-            setSwitchDown(false);
-            haptics[feelObj.up]();
-          }}
+          onPressIn={() => sendInput({ type: 'action', name: 'switch_down' })}
+          onPressOut={() => sendInput({ type: 'action', name: 'switch_up' })}
           style={[styles.keycap, switchDown && styles.keycapPressed]}
         >
           <Text style={styles.keycapText}>
@@ -180,7 +109,7 @@ export default function FidgetSandbox({ blindMode }) {
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>2. MAGNETIC SLIDER</Text>
           <Text style={styles.counter}>
-            STOP {sliderStep + 1}/{SLIDER_STOPS}
+            STOP {sliderStep + 1}/{sliderStops}
           </Text>
         </View>
         <View style={styles.sliderTrack}>
@@ -192,7 +121,7 @@ export default function FidgetSandbox({ blindMode }) {
             {...sliderResponder.panHandlers}
           >
             <View style={styles.sliderDotsRow} pointerEvents="none">
-              {Array.from({ length: SLIDER_STOPS }).map((_, i) => (
+              {Array.from({ length: sliderStops }).map((_, i) => (
                 <View
                   key={i}
                   style={[
@@ -206,7 +135,7 @@ export default function FidgetSandbox({ blindMode }) {
               pointerEvents="none"
               style={[
                 styles.sliderThumb,
-                { left: `${(sliderStep / (SLIDER_STOPS - 1)) * 100}%` },
+                { left: `${(sliderStep / (sliderStops - 1)) * 100}%` },
               ]}
             />
           </View>
@@ -218,14 +147,16 @@ export default function FidgetSandbox({ blindMode }) {
         <View style={styles.cardHeader}>
           <Text style={styles.cardTitle}>3. BUBBLE POP</Text>
           <Text style={styles.counter}>
-            {popped.filter(Boolean).length}/{BUBBLE_COUNT}
+            {popped.filter(Boolean).length}/{popped.length}
           </Text>
         </View>
         <View style={styles.bubbleGrid}>
           {popped.map((isPopped, idx) => (
             <Pressable
               key={idx}
-              onPressIn={() => handlePop(idx)}
+              onPressIn={() =>
+                sendInput({ type: 'action', name: 'pop_bubble', value: idx })
+              }
               style={[styles.bubble, isPopped && styles.bubblePopped]}
             >
               <View style={[styles.bubbleInner, isPopped && styles.bubbleInnerPopped]} />
@@ -244,10 +175,7 @@ export default function FidgetSandbox({ blindMode }) {
         </View>
         <TouchableOpacity
           style={[styles.breathBtn, breathing && styles.breathBtnActive]}
-          onPress={() => {
-            haptics.medium();
-            setBreathing((b) => !b);
-          }}
+          onPress={() => sendInput({ type: 'action', name: 'toggle_breathing' })}
         >
           <Text style={[styles.breathBtnText, breathing && { color: COLORS.success }]}>
             {breathing ? 'STOP SILENT PACER' : 'START SILENT PALM PACER'}

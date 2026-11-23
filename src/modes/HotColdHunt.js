@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,115 +8,22 @@ import {
 } from 'react-native';
 import { haptics } from '../haptics';
 import { COLORS } from '../theme';
-
-function randomBeacon(prev) {
-  let x = 0.16 + Math.random() * 0.68;
-  let y = 0.16 + Math.random() * 0.68;
-  let guard = 0;
-  while (prev && Math.hypot(x - prev.x, y - prev.y) < 0.35 && guard < 25) {
-    x = 0.16 + Math.random() * 0.68;
-    y = 0.16 + Math.random() * 0.68;
-    guard += 1;
-  }
-  return { x, y };
-}
+import { useModeEngine } from './useModeEngine';
+import HotColdHuntMode from '../engine/hotColdHunt';
 
 export default function HotColdHunt({ blindMode }) {
-  const [beacon, setBeacon] = useState(() => randomBeacon(null));
-  const [foundCount, setFoundCount] = useState(0);
+  const { state, sendInput } = useModeEngine(HotColdHuntMode);
+  const { beacon, foundCount, finger, dist, tempLabel } = state;
   const [showTarget, setShowTarget] = useState(false);
-  const [finger, setFinger] = useState(null);
-  const [tempLabel, setTempLabel] = useState('TOUCH & SWEEP TO SENSE THE BEACON');
 
   const padSizeRef = useRef({ width: 320, height: 420 });
-  const beaconRef = useRef(beacon);
-  const fingerRef = useRef(null);
-  const pulseTimerRef = useRef(null);
-  const lockStartRef = useRef(null);
 
-  useEffect(() => {
-    beaconRef.current = beacon;
-  }, [beacon]);
-
-  const stopPulse = () => {
-    if (pulseTimerRef.current) {
-      clearTimeout(pulseTimerRef.current);
-      pulseTimerRef.current = null;
-    }
-    lockStartRef.current = null;
-  };
-
-  useEffect(() => stopPulse, []);
-
-  const captureBeacon = () => {
-    stopPulse();
-    haptics.success();
-    setFoundCount((c) => c + 1);
-    const next = randomBeacon(beaconRef.current);
-    beaconRef.current = next;
-    setBeacon(next);
-    setTempLabel('BEACON CAPTURED! NEW SIGNAL HIDDEN');
-  };
-
-  const getDistance = (pt) => {
-    if (!pt) return 1;
-    const b = beaconRef.current;
-    return Math.hypot(pt.x - b.x, pt.y - b.y);
-  };
-
-  const schedulePulse = () => {
-    stopPulse();
-
-    const loop = () => {
-      const pt = fingerRef.current;
-      if (!pt) return;
-
-      const d = getDistance(pt);
-      let interval = 720;
-
-      if (d <= 0.11) {
-        haptics.rigid();
-        interval = 100;
-        setTempLabel('LOCKED ON — HOLD OR LIFT TO CAPTURE!');
-        if (!lockStartRef.current) {
-          lockStartRef.current = Date.now();
-        } else if (Date.now() - lockStartRef.current >= 550) {
-          captureBeacon();
-          // Resume gentle sonar if finger stays down
-          pulseTimerRef.current = setTimeout(loop, 480);
-          return;
-        }
-      } else {
-        lockStartRef.current = null;
-        if (d <= 0.24) {
-          haptics.medium();
-          interval = 185;
-          setTempLabel('BURNING HOT');
-        } else if (d <= 0.42) {
-          haptics.light();
-          interval = 340;
-          setTempLabel('WARM — GETTING CLOSER');
-        } else {
-          haptics.soft();
-          interval = 680;
-          setTempLabel('COLD — KEEP SWEEPING');
-        }
-      }
-
-      pulseTimerRef.current = setTimeout(loop, interval);
-    };
-
-    loop();
-  };
-
-  const updateFinger = (evt) => {
+  const getNormalizedPoint = (evt) => {
     const { width, height } = padSizeRef.current;
-    if (!width || !height) return;
-    const nx = Math.max(0, Math.min(1, evt.nativeEvent.locationX / width));
-    const ny = Math.max(0, Math.min(1, evt.nativeEvent.locationY / height));
-    const pt = { x: nx, y: ny };
-    fingerRef.current = pt;
-    setFinger(pt);
+    if (!width || !height) return null;
+    const x = Math.max(0, Math.min(1, evt.nativeEvent.locationX / width));
+    const y = Math.max(0, Math.min(1, evt.nativeEvent.locationY / height));
+    return { x, y };
   };
 
   const panResponder = useRef(
@@ -124,33 +31,26 @@ export default function HotColdHunt({ blindMode }) {
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: () => true,
       onPanResponderGrant: (evt) => {
-        updateFinger(evt);
-        schedulePulse();
-      },
-      onPanResponderMove: (evt) => {
-        updateFinger(evt);
-      },
-      onPanResponderRelease: () => {
-        const pt = fingerRef.current;
-        const onTarget = pt && getDistance(pt) <= 0.12;
-        fingerRef.current = null;
-        setFinger(null);
-        if (onTarget) {
-          captureBeacon();
-        } else {
-          stopPulse();
-          setTempLabel('TOUCH & SWEEP TO SENSE THE BEACON');
+        const pt = getNormalizedPoint(evt);
+        if (pt) {
+          sendInput({ type: 'pointer_down', x: pt.x, y: pt.y });
         }
       },
+      onPanResponderMove: (evt) => {
+        const pt = getNormalizedPoint(evt);
+        if (pt) {
+          sendInput({ type: 'pointer_move', x: pt.x, y: pt.y });
+        }
+      },
+      onPanResponderRelease: () => {
+        sendInput({ type: 'pointer_up' });
+      },
       onPanResponderTerminate: () => {
-        fingerRef.current = null;
-        setFinger(null);
-        stopPulse();
+        sendInput({ type: 'pointer_cancel' });
       },
     })
   ).current;
 
-  const dist = finger ? getDistance(finger) : 1;
   const ringColor =
     dist <= 0.11
       ? COLORS.success

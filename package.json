@@ -6,7 +6,10 @@
     "start": "expo start",
     "tunnel": "expo start --tunnel",
     "ios": "expo start --ios",
-    "android": "expo start --android"
+    "android": "expo start --android",
+    "validate": "node scripts/validate.js",
+    "playtest": "node scripts/playtest.js",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "expo": "~58.0.23",

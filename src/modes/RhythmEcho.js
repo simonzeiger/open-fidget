@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+import React from 'react';
 import {
   View,
   Text,
@@ -6,168 +6,22 @@ import {
   Pressable,
   TouchableOpacity,
 } from 'react-native';
-import { haptics, playPattern } from '../haptics';
 import { COLORS } from '../theme';
-
-const HOLD_THRESHOLD_MS = 250;
-const INITIAL_LENGTH = 3;
-
-function makeRandomSymbol() {
-  return Math.random() < 0.5 ? 'DOT' : 'DASH';
-}
-
-function makeSequence(len) {
-  return Array.from({ length: len }, makeRandomSymbol);
-}
+import { useModeEngine } from './useModeEngine';
+import RhythmEchoMode from '../engine/rhythmEcho';
 
 export default function RhythmEcho({ blindMode }) {
-  const [phase, setPhase] = useState('idle'); // idle | playing | listening | success | fail
-  const [sequence, setSequence] = useState([]);
-  const [inputIndex, setInputIndex] = useState(0);
-  const [activeBeat, setActiveBeat] = useState(-1);
-  const [streak, setStreak] = useState(0);
-  const [bestStreak, setBestStreak] = useState(0);
-  const [isHolding, setIsHolding] = useState(false);
-  const [holdCrossed, setHoldCrossed] = useState(false);
-
-  const cancelPlaybackRef = useRef(null);
-  const nextTimerRef = useRef(null);
-  const holdTimerRef = useRef(null);
-  const pressStartRef = useRef(0);
-  const crossedDashRef = useRef(false);
-
-  const cleanupTimers = useCallback(() => {
-    if (cancelPlaybackRef.current) {
-      cancelPlaybackRef.current();
-      cancelPlaybackRef.current = null;
-    }
-    if (nextTimerRef.current) {
-      clearTimeout(nextTimerRef.current);
-      nextTimerRef.current = null;
-    }
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-  }, []);
-
-  useEffect(() => cleanupTimers, [cleanupTimers]);
-
-  const playSequence = useCallback(
-    (seq) => {
-      cleanupTimers();
-      setPhase('playing');
-      setInputIndex(0);
-      setActiveBeat(-1);
-
-      const steps = [];
-      seq.forEach((sym, idx) => {
-        if (sym === 'DOT') {
-          steps.push({
-            type: 'rigid',
-            delay: 420,
-            onStep: () => setActiveBeat(idx),
-          });
-        } else {
-          // DASH: unmistakable double-thump
-          steps.push({
-            type: 'heavy',
-            delay: 115,
-            onStep: () => setActiveBeat(idx),
-          });
-          steps.push({
-            type: 'medium',
-            delay: 420,
-          });
-        }
-      });
-
-      // Tiny initial pause so user settles thumb
-      nextTimerRef.current = setTimeout(() => {
-        cancelPlaybackRef.current = playPattern(steps, () => {
-          setActiveBeat(-1);
-          setPhase('listening');
-        });
-      }, 320);
-    },
-    [cleanupTimers]
-  );
-
-  const startNewGame = useCallback(() => {
-    const seq = makeSequence(INITIAL_LENGTH);
-    setSequence(seq);
-    setStreak(0);
-    playSequence(seq);
-  }, [playSequence]);
-
-  const handlePressIn = () => {
-    if (phase === 'idle') {
-      startNewGame();
-      return;
-    }
-    if (phase !== 'listening') return;
-
-    pressStartRef.current = Date.now();
-    crossedDashRef.current = false;
-    setIsHolding(true);
-    setHoldCrossed(false);
-    haptics.light();
-
-    holdTimerRef.current = setTimeout(() => {
-      crossedDashRef.current = true;
-      setHoldCrossed(true);
-      haptics.heavy();
-    }, HOLD_THRESHOLD_MS);
-  };
-
-  const handlePressOut = () => {
-    if (holdTimerRef.current) {
-      clearTimeout(holdTimerRef.current);
-      holdTimerRef.current = null;
-    }
-    if (!isHolding || phase !== 'listening') {
-      setIsHolding(false);
-      setHoldCrossed(false);
-      return;
-    }
-
-    const elapsed = Date.now() - pressStartRef.current;
-    const entered = crossedDashRef.current || elapsed >= HOLD_THRESHOLD_MS ? 'DASH' : 'DOT';
-
-    setIsHolding(false);
-    setHoldCrossed(false);
-
-    if (entered === 'DOT') {
-      haptics.rigid();
-    }
-
-    const expected = sequence[inputIndex];
-    if (entered !== expected) {
-      setPhase('fail');
-      haptics.error();
-      nextTimerRef.current = setTimeout(() => {
-        startNewGame();
-      }, 1100);
-      return;
-    }
-
-    const nextIdx = inputIndex + 1;
-    setInputIndex(nextIdx);
-
-    if (nextIdx >= sequence.length) {
-      const nextStreak = streak + 1;
-      setStreak(nextStreak);
-      setBestStreak((b) => Math.max(b, nextStreak));
-      setPhase('success');
-      haptics.success();
-
-      const nextSeq = [...sequence, makeRandomSymbol()];
-      setSequence(nextSeq);
-      nextTimerRef.current = setTimeout(() => {
-        playSequence(nextSeq);
-      }, 950);
-    }
-  };
+  const { state, sendInput } = useModeEngine(RhythmEchoMode);
+  const {
+    phase,
+    sequence,
+    inputIndex,
+    activeBeat,
+    streak,
+    bestStreak,
+    isHolding,
+    holdCrossed,
+  } = state;
 
   const phaseLabel = {
     idle: 'TAP PAD TO START',
@@ -192,13 +46,7 @@ export default function RhythmEcho({ blindMode }) {
             </View>
             <TouchableOpacity
               style={styles.pillBtn}
-              onPress={() => {
-                if (sequence.length > 0 && phase === 'listening') {
-                  playSequence(sequence);
-                } else {
-                  startNewGame();
-                }
-              }}
+              onPress={() => sendInput({ type: 'action', name: 'replay' })}
             >
               <Text style={styles.pillText}>
                 {sequence.length > 0 ? 'REPLAY' : 'START'}
@@ -233,8 +81,8 @@ export default function RhythmEcho({ blindMode }) {
       )}
 
       <Pressable
-        onPressIn={handlePressIn}
-        onPressOut={handlePressOut}
+        onPressIn={() => sendInput({ type: 'pointer_down' })}
+        onPressOut={() => sendInput({ type: 'pointer_up' })}
         style={[
           styles.touchPad,
           blindMode && styles.touchPadBlind,

@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -6,7 +6,8 @@ import {
   TouchableOpacity,
 } from 'react-native';
 import { Accelerometer } from 'expo-sensors';
-import { haptics } from '../haptics';
+import VirtualMarbleMode from '../engine/virtualMarble';
+import { useModeEngine } from './useModeEngine';
 import { COLORS } from '../theme';
 
 const TRAYS = [
@@ -15,54 +16,11 @@ const TRAYS = [
   { id: 'hole', label: 'HOLE DROP' },
 ];
 
-const PEGS = [
-  { x: -0.45, y: -0.42 },
-  { x: 0.45, y: -0.42 },
-  { x: 0, y: 0 },
-  { x: -0.45, y: 0.42 },
-  { x: 0.45, y: 0.42 },
-];
-
-function randomHole() {
-  return {
-    x: (Math.random() - 0.5) * 1.35,
-    y: (Math.random() - 0.5) * 1.35,
-  };
-}
-
 export default function VirtualMarble({ blindMode }) {
-  const [tray, setTray] = useState('ridges');
-  const [pos, setPos] = useState({ x: 0, y: 0 });
-  const [hole, setHole] = useState(() => randomHole());
-  const [holesScored, setHolesScored] = useState(0);
+  const { state, sendInput } = useModeEngine(VirtualMarbleMode);
+  const { tray, pos, hole, holesScored, pegs } = state;
   const [sensorReady, setSensorReady] = useState(true);
   const [boxSize, setBoxSize] = useState({ width: 300, height: 340 });
-
-  const trayRef = useRef(tray);
-  const holeRef = useRef(hole);
-  const stateRef = useRef({
-    x: 0,
-    y: 0,
-    vx: 0,
-    vy: 0,
-    cellX: 0,
-    cellY: 0,
-    lastHitMs: 0,
-    inHoleFrames: 0,
-    zeroX: 0,
-    zeroY: 0,
-    rawX: 0,
-    rawY: 0,
-  });
-
-  useEffect(() => {
-    trayRef.current = tray;
-    stateRef.current.inHoleFrames = 0;
-  }, [tray]);
-
-  useEffect(() => {
-    holeRef.current = hole;
-  }, [hole]);
 
   useEffect(() => {
     let sub = null;
@@ -78,123 +36,7 @@ export default function VirtualMarble({ blindMode }) {
         }
         Accelerometer.setUpdateInterval(25);
         sub = Accelerometer.addListener(({ x, y }) => {
-          const s = stateRef.current;
-          const now = Date.now();
-          s.rawX = x;
-          s.rawY = y;
-
-          // Convert phone tilt into tray acceleration
-          const ax = (x - s.zeroX) * 0.042;
-          const ay = -(y - s.zeroY) * 0.042;
-
-          s.vx = (s.vx + ax) * 0.935;
-          s.vy = (s.vy + ay) * 0.935;
-
-          // Clamp max velocity
-          const speed = Math.hypot(s.vx, s.vy);
-          if (speed > 0.16) {
-            s.vx = (s.vx / speed) * 0.16;
-            s.vy = (s.vy / speed) * 0.16;
-          }
-
-          s.x += s.vx;
-          s.y += s.vy;
-
-          // Wall collisions
-          const limit = 0.92;
-          let wallImpact = 0;
-          if (s.x > limit) {
-            s.x = limit;
-            wallImpact = Math.max(wallImpact, Math.abs(s.vx));
-            s.vx = -s.vx * 0.52;
-          } else if (s.x < -limit) {
-            s.x = -limit;
-            wallImpact = Math.max(wallImpact, Math.abs(s.vx));
-            s.vx = -s.vx * 0.52;
-          }
-          if (s.y > limit) {
-            s.y = limit;
-            wallImpact = Math.max(wallImpact, Math.abs(s.vy));
-            s.vy = -s.vy * 0.52;
-          } else if (s.y < -limit) {
-            s.y = -limit;
-            wallImpact = Math.max(wallImpact, Math.abs(s.vy));
-            s.vy = -s.vy * 0.52;
-          }
-
-          if (wallImpact > 0.018 && now - s.lastHitMs > 75) {
-            s.lastHitMs = now;
-            if (wallImpact > 0.08) haptics.rigid();
-            else if (wallImpact > 0.045) haptics.medium();
-            else haptics.soft();
-          }
-
-          // Tray-specific tactile mechanics
-          if (trayRef.current === 'ridges') {
-            const cx = Math.floor((s.x + 1) * 3.5);
-            const cy = Math.floor((s.y + 1) * 4.5);
-            if ((cx !== s.cellX || cy !== s.cellY) && now - s.lastHitMs > 45) {
-              s.cellX = cx;
-              s.cellY = cy;
-              s.lastHitMs = now;
-              if (speed > 0.06) haptics.light();
-              else haptics.tick();
-            }
-          } else if (trayRef.current === 'pegs') {
-            const pegRadius = 0.17;
-            for (let i = 0; i < PEGS.length; i += 1) {
-              const p = PEGS[i];
-              const dx = s.x - p.x;
-              const dy = s.y - p.y;
-              const d = Math.hypot(dx, dy);
-              if (d > 0.001 && d < pegRadius) {
-                const nx = dx / d;
-                const ny = dy / d;
-                s.x = p.x + nx * pegRadius;
-                s.y = p.y + ny * pegRadius;
-                const dot = s.vx * nx + s.vy * ny;
-                if (dot < 0) {
-                  s.vx -= 1.7 * dot * nx;
-                  s.vy -= 1.7 * dot * ny;
-                }
-                if (now - s.lastHitMs > 70) {
-                  s.lastHitMs = now;
-                  haptics.rigid();
-                }
-              }
-            }
-          } else if (trayRef.current === 'hole') {
-            const h = holeRef.current;
-            const dx = h.x - s.x;
-            const dy = h.y - s.y;
-            const d = Math.hypot(dx, dy);
-
-            if (d < 0.32 && d > 0.01) {
-              // Subtle gravity well near the dimple rim
-              s.vx += (dx / d) * 0.006;
-              s.vy += (dy / d) * 0.006;
-            }
-
-            if (d < 0.15) {
-              s.inHoleFrames += 1;
-              if (s.inHoleFrames === 1 && now - s.lastHitMs > 80) {
-                s.lastHitMs = now;
-                haptics.tick();
-              }
-              if (s.inHoleFrames > 14 && speed < 0.045) {
-                s.inHoleFrames = 0;
-                haptics.success();
-                setHolesScored((n) => n + 1);
-                const nextH = randomHole();
-                holeRef.current = nextH;
-                setHole(nextH);
-              }
-            } else {
-              s.inHoleFrames = 0;
-            }
-          }
-
-          setPos({ x: s.x, y: s.y });
+          sendInput({ type: 'imu', ax: x, ay: y });
         });
       } catch (_) {
         if (mounted) setSensorReady(false);
@@ -207,18 +49,11 @@ export default function VirtualMarble({ blindMode }) {
       mounted = false;
       if (sub) sub.remove();
     };
-  }, []);
+  }, [sendInput]);
 
   const calibrateFlat = () => {
-    haptics.medium();
-    const s = stateRef.current;
-    s.zeroX = s.rawX;
-    s.zeroY = s.rawY;
-    s.x = 0;
-    s.y = 0;
-    s.vx = 0;
-    s.vy = 0;
-    setPos({ x: 0, y: 0 });
+    sendInput({ type: 'action', name: 'calibrate' });
+    sendInput({ type: 'action', name: 'reset_marble' });
   };
 
   const toScreen = (nx, ny) => ({
@@ -239,8 +74,7 @@ export default function VirtualMarble({ blindMode }) {
                 key={t.id}
                 style={[styles.trayPill, tray === t.id && styles.trayPillActive]}
                 onPress={() => {
-                  haptics.tick();
-                  setTray(t.id);
+                  sendInput({ type: 'action', name: 'set_tray', value: t.id });
                 }}
               >
                 <Text style={[styles.trayText, tray === t.id && styles.trayTextActive]}>
@@ -280,7 +114,7 @@ export default function VirtualMarble({ blindMode }) {
             )}
 
             {tray === 'pegs' &&
-              PEGS.map((p, idx) => {
+              pegs.map((p, idx) => {
                 const pt = toScreen(p.x, p.y);
                 return <View key={idx} style={[styles.peg, pt]} />;
               })}

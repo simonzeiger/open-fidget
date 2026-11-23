@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,147 +6,69 @@ import {
   PanResponder,
   TouchableOpacity,
 } from 'react-native';
-import { haptics, playPattern } from '../haptics';
 import { COLORS } from '../theme';
-
-const DIAL_STEPS = 24;
-const PIXELS_PER_TICK = 18;
-const PINS_PER_VAULT = 3;
-
-function randomTarget(avoid) {
-  let next = Math.floor(Math.random() * DIAL_STEPS);
-  let guard = 0;
-  while (circularDist(next, avoid) < 5 && guard < 30) {
-    next = Math.floor(Math.random() * DIAL_STEPS);
-    guard += 1;
-  }
-  return next;
-}
-
-function circularDist(a, b) {
-  const raw = Math.abs(a - b) % DIAL_STEPS;
-  return Math.min(raw, DIAL_STEPS - raw);
-}
+import SafeCrackerMode from '../engine/safeCracker';
+import { useModeEngine } from './useModeEngine';
 
 export default function SafeCracker({ blindMode }) {
-  const [detent, setDetent] = useState(0);
-  const [target, setTarget] = useState(() => randomTarget(0));
-  const [pinsLocked, setPinsLocked] = useState(0);
-  const [vaultsCracked, setVaultsCracked] = useState(0);
-  const [strictMode, setStrictMode] = useState(false);
-  const [statusText, setStatusText] = useState('Slide thumb slowly to feel the heavy tumbler click');
-  const [isTouching, setIsTouching] = useState(false);
+  const { state, sendInput } = useModeEngine(SafeCrackerMode);
+  const {
+    detent,
+    dist,
+    onTarget,
+    pinsLocked,
+    pinsPerVault,
+    dialSteps,
+    vaultsCracked,
+    strictMode,
+    statusText,
+    isTouching,
+  } = state;
 
-  const detentRef = useRef(0);
-  const startDetentRef = useRef(0);
-  const targetRef = useRef(target);
-  const pinsRef = useRef(0);
-  const strictRef = useRef(false);
-  const movedRef = useRef(false);
-  const cancelPatternRef = useRef(null);
+  const padSizeRef = useRef({ width: 360, height: 420 });
+  const sendInputRef = useRef(sendInput);
+  sendInputRef.current = sendInput;
 
-  useEffect(() => {
-    targetRef.current = target;
-  }, [target]);
+  const panResponder = useMemo(
+    () =>
+      PanResponder.create({
+        onStartShouldSetPanResponder: () => true,
+        onMoveShouldSetPanResponder: () => true,
+        onPanResponderGrant: (evt) => {
+          const { locationX = 0, locationY = 0 } = evt?.nativeEvent || {};
+          const { width, height } = padSizeRef.current;
+          sendInputRef.current({
+            type: 'pointer_down',
+            x: width > 0 ? locationX / width : 0,
+            y: height > 0 ? locationY / height : 0,
+          });
+        },
+        onPanResponderMove: (evt) => {
+          const { locationX = 0, locationY = 0 } = evt?.nativeEvent || {};
+          const { width, height } = padSizeRef.current;
+          sendInputRef.current({
+            type: 'pointer_move',
+            x: width > 0 ? locationX / width : 0,
+            y: height > 0 ? locationY / height : 0,
+          });
+        },
+        onPanResponderRelease: () => {
+          sendInputRef.current({ type: 'pointer_up' });
+        },
+        onPanResponderTerminate: () => {
+          sendInputRef.current({ type: 'pointer_cancel' });
+        },
+      }),
+    []
+  );
 
-  useEffect(() => {
-    pinsRef.current = pinsLocked;
-  }, [pinsLocked]);
-
-  useEffect(() => {
-    strictRef.current = strictMode;
-  }, [strictMode]);
-
-  useEffect(() => {
-    return () => {
-      if (cancelPatternRef.current) cancelPatternRef.current();
-    };
-  }, []);
-
-  const triggerDetentHaptic = (newDetent) => {
-    const dist = circularDist(newDetent, targetRef.current);
-    if (dist === 0) {
-      if (cancelPatternRef.current) cancelPatternRef.current();
-      cancelPatternRef.current = playPattern([
-        { type: 'heavy', delay: 55 },
-        { type: 'rigid', delay: 0 },
-      ]);
-    } else if (dist === 1) {
-      haptics.medium();
-    } else {
-      haptics.tick();
+  const handlePadLayout = (evt) => {
+    const { width, height } = evt?.nativeEvent?.layout || {};
+    if (width > 0 && height > 0) {
+      padSizeRef.current = { width, height };
+      sendInput({ type: 'resize', widthPx: width, heightPx: height });
     }
   };
-
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: () => true,
-      onPanResponderGrant: () => {
-        startDetentRef.current = detentRef.current;
-        movedRef.current = false;
-        setIsTouching(true);
-        haptics.light();
-      },
-      onPanResponderMove: (_, gesture) => {
-        // Combine horizontal drag with minor vertical contribution for natural thumb arcs
-        const deltaTicks = Math.round((gesture.dx - gesture.dy * 0.25) / PIXELS_PER_TICK);
-        const next = ((startDetentRef.current + deltaTicks) % DIAL_STEPS + DIAL_STEPS) % DIAL_STEPS;
-        if (next !== detentRef.current) {
-          detentRef.current = next;
-          movedRef.current = true;
-          setDetent(next);
-          triggerDetentHaptic(next);
-        }
-      },
-      onPanResponderRelease: () => {
-        setIsTouching(false);
-        if (!movedRef.current) return;
-
-        const dist = circularDist(detentRef.current, targetRef.current);
-        if (dist === 0) {
-          const nextPins = pinsRef.current + 1;
-          if (nextPins >= PINS_PER_VAULT) {
-            setVaultsCracked((v) => v + 1);
-            setPinsLocked(0);
-            pinsRef.current = 0;
-            const freshTarget = randomTarget(detentRef.current);
-            setTarget(freshTarget);
-            targetRef.current = freshTarget;
-            setStatusText('Vault cracked! New combination set');
-            if (cancelPatternRef.current) cancelPatternRef.current();
-            cancelPatternRef.current = playPattern([
-              { type: 'success', delay: 140 },
-              { type: 'heavy', delay: 110 },
-              { type: 'success', delay: 0 },
-            ]);
-          } else {
-            setPinsLocked(nextPins);
-            pinsRef.current = nextPins;
-            const freshTarget = randomTarget(detentRef.current);
-            setTarget(freshTarget);
-            targetRef.current = freshTarget;
-            setStatusText(`Pin ${nextPins}/${PINS_PER_VAULT} locked! Find the next tumbler`);
-            haptics.success();
-          }
-        } else if (strictRef.current && pinsRef.current > 0) {
-          setPinsLocked(0);
-          pinsRef.current = 0;
-          setStatusText('Slipped! Strict mode reset all pins');
-          haptics.error();
-        } else {
-          setStatusText('Missed tumbler — keep sweeping slowly');
-          haptics.soft();
-        }
-      },
-      onPanResponderTerminate: () => {
-        setIsTouching(false);
-      },
-    })
-  ).current;
-
-  const dist = circularDist(detent, target);
-  const onTarget = dist === 0;
 
   return (
     <View style={[styles.container, blindMode && styles.blackout]}>
@@ -158,7 +80,7 @@ export default function SafeCracker({ blindMode }) {
               <Text style={styles.bigStat}>{vaultsCracked}</Text>
             </View>
             <View style={styles.pinRow}>
-              {Array.from({ length: PINS_PER_VAULT }).map((_, i) => (
+              {Array.from({ length: pinsPerVault }).map((_, i) => (
                 <View
                   key={i}
                   style={[
@@ -170,10 +92,7 @@ export default function SafeCracker({ blindMode }) {
             </View>
             <TouchableOpacity
               style={[styles.pillBtn, strictMode && styles.pillBtnActive]}
-              onPress={() => {
-                haptics.tick();
-                setStrictMode((s) => !s);
-              }}
+              onPress={() => sendInput({ type: 'action', name: 'toggle_strict' })}
             >
               <Text style={[styles.pillText, strictMode && styles.pillTextActive]}>
                 {strictMode ? 'STRICT ON' : 'CHILL'}
@@ -184,7 +103,7 @@ export default function SafeCracker({ blindMode }) {
           <Text style={styles.status}>{statusText}</Text>
 
           <View style={styles.dialStrip}>
-            {Array.from({ length: DIAL_STEPS }).map((_, i) => {
+            {Array.from({ length: dialSteps }).map((_, i) => {
               const isCurrent = i === detent;
               const isHint = onTarget && isCurrent;
               return (
@@ -201,7 +120,7 @@ export default function SafeCracker({ blindMode }) {
             })}
           </View>
           <Text style={styles.dialReadout}>
-            NOTCH {String(detent).padStart(2, '0')} / {DIAL_STEPS - 1}
+            NOTCH {String(detent).padStart(2, '0')} / {dialSteps - 1}
             {dist === 1 ? '  •  TENSION' : onTarget ? '  •  TUMBLER!' : ''}
           </Text>
         </View>
@@ -214,20 +133,21 @@ export default function SafeCracker({ blindMode }) {
           !blindMode && isTouching && styles.touchPadActive,
           !blindMode && onTarget && isTouching && styles.touchPadHot,
         ]}
+        onLayout={handlePadLayout}
         {...panResponder.panHandlers}
       >
         {!blindMode ? (
           <>
-            <Text style={styles.padIcon}>◎</Text>
-            <Text style={styles.padTitle}>
+            <Text style={styles.padIcon} pointerEvents="none">◎</Text>
+            <Text style={styles.padTitle} pointerEvents="none">
               {isTouching ? 'FEEL FOR THE DOUBLE-THUNK' : 'DRAG THUMB LEFT / RIGHT'}
             </Text>
-            <Text style={styles.padHint}>
+            <Text style={styles.padHint} pointerEvents="none">
               Lift your thumb when you land on the heavy tumbler click
             </Text>
           </>
         ) : (
-          <Text style={styles.blindWhisper}>SAFE CRACKER • DRAG & RELEASE</Text>
+          <Text style={styles.blindWhisper} pointerEvents="none">SAFE CRACKER • DRAG & RELEASE</Text>
         )}
       </View>
     </View>
